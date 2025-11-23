@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Bridle - Final Demo</title>
+    <style>
+        /* --- 基础设定 --- */
+        :root {
+            --tech-blue: #00f3ff;
+            --tech-red: #ff3333;
+            --tech-dark: #002a33;
+            --font-main: "Courier New", Courier, monospace;
+        }
+
+        body {
+            margin: 0; padding: 0; background-color: #000;
+            color: var(--tech-blue); font-family: var(--font-main);
+            height: 100vh; width: 100vw; overflow: hidden;
+            user-select: none; cursor: none;
+        }
+
+        #game-viewport {
+            position: relative; width: 100%; height: 100%; background: #000;
+        }
+
+        /* --- 光标系统 --- */
+        #neuro-cursor {
+            position: fixed; top: 0; left: 0; width: 30px; height: 30px;
+            pointer-events: none; z-index: 100000; mix-blend-mode: screen;
+            transform: translate(-50%, -50%); will-change: transform;
+        }
+        /* 默认光标样式 */
+        .cursor-dot {
+            position: absolute; top: 50%; left: 50%; width: 4px; height: 4px;
+            background: #fff; border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px #fff;
+        }
+        .cursor-ring {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            border: 1px solid var(--tech-blue); border-radius: 50%;
+            box-shadow: 0 0 5px var(--tech-blue); animation: rotateCursor 10s linear infinite;
+        }
+        .cursor-cross-v { position: absolute; top: -5px; left: 50%; width: 1px; height: 40px; background: rgba(0, 243, 255, 0.5); transform: translateX(-50%); }
+        .cursor-cross-h { position: absolute; top: 50%; left: -5px; width: 40px; height: 1px; background: rgba(0, 243, 255, 0.5); transform: translateY(-50%); }
+
+        /* 焊枪模式光标 */
+        body.gun-mode #neuro-cursor {
+            width: 180px; height: 120px; /* 调整尺寸以适应 gun.png */
+            mix-blend-mode: normal; 
+        }
+        body.gun-mode .cursor-dot, 
+        body.gun-mode .cursor-ring, 
+        body.gun-mode .cursor-cross-v, 
+        body.gun-mode .cursor-cross-h {
+            display: none; /* 隐藏默认几何图形 */
+        }
+        body.gun-mode #neuro-cursor::after {
+            content: '';
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-image: url('gun.png');
+            background-size: contain; background-repeat: no-repeat;
+            background-position: left center; /* 确保枪尖在左侧 */
+            filter: drop-shadow(0 0 5px var(--tech-blue));
+        }
+
+        @keyframes rotateCursor {
+            0% { transform: rotate(0deg) scale(1); }
+            100% { transform: rotate(360deg) scale(1); }
+        }
+
+        /* --- 场景层 & 转场动画 --- */
+        #scene-layer {
+            width: 100%; height: 100%; position: absolute; top: 0; left: 0;
+            z-index: 10; overflow: hidden; 
+            background: #000;
+        }
+        #scene-bg { 
+            width: 100%; height: 100%; object-fit: cover; display: block; 
+            transition: transform 0.4s cubic-bezier(0.7, 0, 0.3, 1), opacity 0.4s ease-in 0.2s;
+            transform-origin: center center;
+            opacity: 1; transform: scale(1);
+        }
+        #scene-bg.transitioning-out {
+            transform: scale(2.5); 
+            opacity: 0; 
+        }
+        #scene-bg.no-transition {
+            transition: none !important;
+        }
+
+        /* 热点区域 */
+        .hotspot {
+            position: absolute; 
+            border: 1px solid transparent; 
+            background: transparent;
+            cursor: none; z-index: 20;
+            transition: opacity 0.3s; 
+        }
+        .hotspot:hover {
+            background: rgba(0, 243, 255, 0.15);
+            box-shadow: 0 0 15px var(--tech-blue);
+            border: 1px solid rgba(0, 243, 255, 0.1); 
+        }
+        .hotspot.back-area:hover {
+            background: linear-gradient(to top, rgba(0, 243, 255, 0.2), transparent);
+            box-shadow: none; 
+            border: none;
+        }
+        .hotspot.back-area::after {
+            content: '▼ RETURN ▼';
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            font-size: 12px; opacity: 0; transition: opacity 0.3s;
+            color: var(--tech-blue); text-shadow: 0 0 5px var(--tech-blue);
+        }
+        .hotspot.back-area:hover::after { opacity: 1; }
+
+        #hotspots-container.hidden { opacity: 0; pointer-events: none; }
+
+        /* --- UI 层 --- */
+        #hud-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 200; pointer-events: none;
+            box-shadow: inset 0 0 100px rgba(0, 100, 255, 0.3), inset 0 0 20px var(--tech-blue);
+        }
+        #hud-overlay::before {
+            content: " "; display: block; position: absolute; top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 255, 255, 0.05) 50%);
+            background-size: 100% 4px; z-index: 201;
+        }
+
+        #ui-top-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 9999; }
+
+        #stats-panel {
+            position: absolute; top: 20px; left: 20px; width: 280px;
+            pointer-events: auto; background: rgba(0, 0, 0, 0.6);
+            padding: 10px; border-radius: 5px; border: 1px solid #444;
+            opacity: 0; transition: opacity 1s ease-in-out; 
+        }
+        #stats-panel.active { opacity: 1; }
+
+        .stat-row { display: flex; align-items: center; margin-bottom: 10px; text-shadow: 0 0 5px var(--tech-blue); }
+        .stat-label { width: 90px; font-size: 14px; font-weight: bold; color: #fff; }
+        .progress-bar-container { flex-grow: 1; height: 10px; background: #001a22; border: 1px solid var(--tech-blue); margin: 0 10px; }
+        .progress-fill { height: 100%; background: var(--tech-blue); width: 0%; box-shadow: 0 0 8px var(--tech-blue); transition: width 0.3s, background-color 0.3s, box-shadow 0.3s; }
+        .stat-value { width: 60px; font-size: 14px; text-align: right; color: #fff;}
+
+        #log-container {
+            position: absolute; bottom: 20px; left: 20px; width: 500px;
+            height: 90px; opacity: 0; transform: translateY(20px); 
+            background: rgba(0, 42, 51, 0.5);
+            display: block; overflow-y: hidden; 
+            pointer-events: auto; padding: 5px 15px;
+            border-left: 3px solid var(--tech-blue);
+            transition: height 0.4s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.4s, background 0.4s, transform 0.5s ease-out;
+        }
+        #log-container.active { opacity: 0.8; transform: translateY(0); }
+        #log-container:hover {
+            height: 250px; opacity: 1;
+            background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 100%);
+            padding: 15px; box-shadow: 0 0 20px rgba(0, 243, 255, 0.1);
+            overflow-y: auto; 
+        }
+        #log-container::-webkit-scrollbar { width: 4px; }
+        #log-container::-webkit-scrollbar-track { background: #001a22; }
+        #log-container::-webkit-scrollbar-thumb { background: var(--tech-blue); }
+
+        .log-entry {
+            font-size: 16px; margin-top: 6px; padding: 2px 8px;
+            background: rgba(0, 42, 51, 0.6); border-left: 2px solid transparent;
+            animation: slideUp 0.2s ease-out; text-shadow: 0 0 2px #000;
+            transition: opacity 0.5s ease-out; 
+        }
+        .log-entry.ai-msg { color: var(--tech-blue); border-left-color: var(--tech-blue); }
+        .log-entry.sys-err { color: var(--tech-red); border-left-color: var(--tech-red); text-shadow: 0 0 3px red; }
+
+        .binary-glitch {
+            position: absolute; color: rgba(0, 243, 255, 0.7);
+            font-size: 14px; font-family: monospace; z-index: 9000; pointer-events: none;
+            text-shadow: 0 0 5px var(--tech-blue); white-space: nowrap; mix-blend-mode: overlay;
+        }
+
+        /* --- 物品展示弹窗 --- */
+        #item-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); z-index: 5000;
+            display: none; justify-content: center; align-items: center;
+            opacity: 0; transition: opacity 0.5s; pointer-events: auto;
+        }
+        #item-overlay.visible { opacity: 1; }
+        #item-img {
+            max-width: 60%; max-height: 60%; 
+            box-shadow: 0 0 50px rgba(0, 243, 255, 0.3);
+            border: 1px solid var(--tech-blue);
+            transform: scale(0.8); transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #item-overlay.visible #item-img { transform: scale(1); }
+        #item-hint {
+            position: absolute; bottom: 10%; color: #fff;
+            font-size: 14px; letter-spacing: 2px;
+            animation: blink 1.5s infinite;
+        }
+
+        /* --- 结局画面 --- */
+        #ending-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 200000; /* 修改点：层级调高，遮住所有东西 */
+            display: none;
+            flex-direction: column; justify-content: center; align-items: center;
+            opacity: 0; transition: opacity 2s;
+        }
+        #ending-text {
+            color: var(--tech-red); font-size: 24px; text-align: center;
+            line-height: 2; max-width: 700px; text-shadow: 0 0 10px red;
+        }
+
+        /* --- 小游戏层 --- */
+        #minigame-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 50; display: none; 
+            flex-direction: column;
+            justify-content: center; align-items: center; pointer-events: auto;
+        }
+        
+        #game-wrapper {
+            position: relative; width: 600px; height: 400px;
+            flex-shrink: 0; margin-bottom: 30px;
+            transition: filter 0.5s ease, opacity 0.5s ease;
+        }
+
+        #repair-canvas {
+            width: 100%; height: 100%;
+            background: transparent; 
+            border: 1px solid rgba(0, 243, 255, 0.3);
+            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+            cursor: none;
+        }
+
+        #check-btn {
+            position: absolute; bottom: -50px; right: 0;
+            padding: 10px 30px; background: rgba(0,0,0,0.8); 
+            border: 1px solid var(--tech-blue); color: var(--tech-blue);
+            font-family: inherit; font-size: 18px; cursor: none;
+            transition: all 0.3s;
+        }
+        #check-btn:hover { background: var(--tech-blue); color: #000; }
+
+        #ai-help-btn {
+            position: relative; padding: 15px 30px; background: #000; 
+            color: var(--tech-blue); font-weight: bold; font-size: 16px; 
+            border: 1px solid var(--tech-blue); cursor: none;
+            opacity: 0; pointer-events: none; transform: scale(1);
+            z-index: 60; box-shadow: 0 0 10px var(--tech-blue);
+            text-shadow: 0 0 5px var(--tech-blue); transition: all 0.5s ease; 
+        }
+        #ai-help-btn.critical-mode {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(2.0) !important;
+            opacity: 1 !important; pointer-events: auto; z-index: 1000;
+            background: #000; box-shadow: 0 0 50px var(--tech-red);
+            border-color: var(--tech-red); color: var(--tech-red);
+            animation: pulse-red 1s infinite;
+        }
+
+        /* --- 开场/特效层 --- */
+        #eyelids-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 100; pointer-events: none; display: flex; flex-direction: column;
+        }
+        .eyelid { background: #000; width: 100%; height: 50%; transition: height 2.5s cubic-bezier(0.645, 0.045, 0.355, 1); }
+        body.eyes-open .eyelid { height: 0%; }
+
+        #intro-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 300; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; cursor: none;
+        }
+        #intro-text {
+            font-size: 24px; color: #fff; text-align: center; max-width: 600px; min-height: 40px;
+            line-height: 1.5; text-shadow: 0 0 10px var(--tech-blue); padding: 20px;
+            border: 1px solid rgba(0, 243, 255, 0.3); background: rgba(0, 42, 51, 0.8);
+        }
+        #intro-hint { margin-top: 20px; font-size: 14px; color: #888; animation: blink 1s infinite; }
+
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes blink { 50% { opacity: 0; } }
+        @keyframes pulse-red { 0%, 100% { box-shadow: 0 0 20px var(--tech-red); } 50% { box-shadow: 0 0 60px var(--tech-red); scale: 2.0; } }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-viewport">
+        <div id="neuro-cursor">
+            <div class="cursor-ring"></div>
+            <div class="cursor-dot"></div>
+            <div class="cursor-cross-v"></div>
+            <div class="cursor-cross-h"></div>
+        </div>
+
+        <div id="scene-layer">
+            <img id="scene-bg" src="" alt="Scene">
+            <div id="hotspots-container"></div>
+        </div>
+
+        <div id="minigame-layer">
+            <div id="game-wrapper">
+                <canvas id="repair-canvas" width="600" height="400"></canvas>
+                <button id="check-btn">[ 确认修复 ]</button>
+            </div>
+            <button id="ai-help-btn">>>> 申请 AI 托管 <<<</button>
+        </div>
+
+        <div id="item-overlay">
+            <img id="item-img" src="" alt="Item">
+            <div id="item-hint">CLICK TO DISMISS</div>
+        </div>
+
+        <div id="ending-layer">
+            <div id="ending-text"></div>
+        </div>
+
+        <div id="eyelids-layer">
+            <div class="eyelid"></div>
+            <div class="eyelid"></div>
+        </div>
+
+        <div id="hud-overlay"></div>
+
+        <div id="intro-layer">
+            <div id="intro-text"></div>
+            <div id="intro-hint">▼ </div>
+        </div>
+
+        <div id="ui-top-layer">
+            <div id="stats-panel">
+                <div class="stat-row">
+                    <div class="stat-label">生理损耗率</div>
+                    <div class="progress-bar-container"><div id="bar-hpr" class="progress-fill"></div></div>
+                    <div id="text-hpr" class="stat-value"></div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">今日信用点</div>
+                    <div class="progress-bar-container"><div id="bar-cre" class="progress-fill"></div></div>
+                    <div id="text-cre" class="stat-value"></div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">AI协同度</div>
+                    <div class="progress-bar-container"><div id="bar-syc" class="progress-fill"></div></div>
+                    <div id="text-syc" class="stat-value"></div>
+                </div>
+            </div>
+            <div id="log-container"></div>
+        </div>
+    </div>
+
+    <script>
+        const GAME_DATA = {
+            stats: { 
+                hpr: 10, // 生理损耗率
+                cre: 54, // 今日信用点
+                syc: 24  // AI协同度
+            },
+            statsMax: { hpr: 100, cre: 100, syc: 100 }, 
+            flags: { 
+                pipeRepaired: false,
+                foundNail: false 
+            }, 
+            miniGame: { fails: 0, maxFails: 5, isPlaying: false },
+            introScriptBlack: [
+                "系统启动... 神经ID: 7341",
+                "出生即植入，效率即正义", 
+                "欢迎加入大协同时代!\n协同者7341。",
+                "监测到生命体征波动。正在强制唤醒...",
+                "7341视觉信号接入中..."
+            ],
+            introScriptCeiling: [
+                "心率稳定，神经接口连接正常。今日工单：17件。KPI目标：98%。开始同步信息...",
+                "今日新闻：【公共资源部指令】依据 《个人健康积分管理办法》已全面接入市政服务。积分低于阈值者，将限制使用高速网络及公共交通工具等社会资源。请保持良好身体状态，为社会持续贡献。",
+                "【市政效率委员会通告】为优化通勤效率，即日起轨道交通全面推行依据 《静默通勤管理办法》。乘客交谈将按每分钟5信用点自动扣费。建议市民使用神经接口进行无损交流。",
+                "【能源供应委员会通知】近期因极端天气与AI算力需求激增，全球能源供应趋紧。为保障城市核心功能运转，将启动 《分级能源配给预案》​ 。期间，部分非必要公共服务或出现间歇性能耗限制。",
+                "听着，7341。你的今日信用点进度已经严重滞后了，我为你接了新的工单",
+                "工单 #7B-03 | 供水设施冷却设备维护任务概要：主智能调节系统（AI-Core-04）因不明原因离线。根据《最终冗余协议》第7条，立即启用“机械冗余备份”。前往塔基B-12区，修复管道PG-C-12-008和泄压阀 V-8P，建立紧急冷却循环",
+            ],
+            scenes: {
+                // --- 场景 0: 天花板 ---
+                'scene_0': {
+                    id: 'scene_0',
+                    bg: 'ceiling.png', 
+                    hotspots: [] 
+                },
+                // --- 场景 1: 大门 ---
+                'scene_1': { 
+                    id: 'scene_1',
+                    bg: 'gate.png', // 修改点：修正扩展名匹配上传文件
+                    hotspots: [ 
+                        { id: 'enter_gate', type: 'change', target: 'scene_2', area: { x: 38, y: 28, w: 22, h: 55 }, tooltip: '进入' },
+                        { id: 'pipe_big_left', type: 'dialogue', text: 'AI: 废弃排水管。结构完整，无需操作。', area: { x: 0, y: 10, w: 8, h: 90 } },
+                        { id: 'pipes_blue_right', type: 'dialogue', text: 'AI: 冷却液输送系统。读数：0。已停用多年。', area: { x: 68, y: 35, w: 30, h: 50 } },
+                        // 修改点：补回index13遗漏的热点
+                        { id: 'gate_window', type: 'dialogue', text: 'SYS: 内部无热成像反应。', area: { x: 88, y: 8, w: 12, h: 15 } },
+                        { id: 'sign_top', type: 'dialogue', text: 'SYS: 警告标识已模糊。', area: { x: 35, y: 22, w: 30, h: 6 } }
+                    ]
+                },
+                // --- 场景 2: 走廊 ---
+                'scene_2': { 
+                    id: 'scene_2',
+                    bg: 'corridor.png',
+                    hotspots: [
+                        { id: 'arrow_left', type: 'change', target: 'scene_3', area: { x: 28, y: 66, w: 15, h: 10 }, tooltip: '前往深处' },
+                        { id: 'arrow_right', type: 'change', target: 'scene_4', area: { x: 82, y: 56, w: 10, h: 8 }, tooltip: '检查侧翼' },
+                        { id: 'door', type: 'dialogue', text: 'SYS: [物理锁定] 门锁锈死，无法开启。', area: { x: 62, y: 40, w: 13, h: 42 } },
+                        { id: 'back', type: 'change', target: 'scene_1', area: { x: 0, y: 85, w: 100, h: 15 }, tooltip: '返回大门', className: 'back-area' },
+                        // 修改点：补回index13遗漏的热点
+                        { id: 'corridor_window_right', type: 'dialogue', text: 'AI: 玻璃表面覆盖高浓度尘埃。无法透视。', area: { x: 80, y: 12, w: 10, h: 15 } },
+                        { id: 'corridor_window_left', type: 'dialogue', text: 'SYS: 窗户：外部结构稳定。内部灰尘浓度极高。', area: { x: 20, y: 5, w: 10, h: 20 } },
+                        { id: 'wall_pipes', type: 'dialogue', text: 'AI: 监测到微弱震动。源头在前方。', area: { x: 0, y: 0, w: 10, h: 100 } },
+                        { id: 'window_top', type: 'dialogue', text: 'AI: 高处通风口。未检测到气流。', area: { x: 45, y: 0, w: 15, h: 15 } }
+                    ]
+                },
+                // --- 场景 3: 死胡同 (废土寻宝) ---
+                'scene_3': { 
+                    id: 'scene_3',
+                    // 背景图会在 SceneManager 中动态判断
+                    bg: 'dead_end_hide.png', // 修改点：修正扩展名为 png
+                    hotspots: [
+                        { id: 'pipes_target', type: 'minigame_trigger', area: { x: 2, y: 20, w: 25, h: 50 }, tooltip: '检查管道' },
+                        { id: 'planks', type: 'custom_action', action: 'checkPlanks', area: { x: 68, y: 30, w: 20, h: 45 }, tooltip: '检查废料' },
+                        { id: 'back', type: 'change', target: 'scene_2', area: { x: 0, y: 85, w: 100, h: 15 }, tooltip: '返回走廊', className: 'back-area' },
+                        // 修改点：补回index13遗漏的热点
+                        { id: 'water_hose', type: 'dialogue', text: 'AI: 消防水带。橡胶老化严重，不可用。', area: { x: 54, y: 28, w: 6, h: 30 } },
+                        { id: 'tank', type: 'dialogue', text: 'SYS: 氮气罐。状态：空。', area: { x: 38, y: 58, w: 8, h: 15 } },
+                        { id: 'shelf_top', type: 'dialogue', text: 'AI: 检测到有机残留物。建议勿触碰。', area: { x: 50, y: 0, w: 50, h: 20 } }
+                    ]
+                },
+                // --- 场景 4: 右侧区域 (新增) ---
+                'scene_4': {
+                    id: 'scene_4',
+                    bg: 'rightside.png',
+                    hotspots: [
+                        { id: 'ladder', type: 'dialogue', text: 'AI: 通往上层结构。结构不稳，禁止攀爬。', area: { x: 70, y: 25, w: 8, h: 40 } },
+                        { id: 'barrel', type: 'dialogue', text: 'SYS: 未知化学残留。', area: { x: 62, y: 50, w: 8, h: 10 } },
+                        // 地面箭头前往对话场景
+                        { id: 'arrow_ground', type: 'change', target: 'scene_6_dialog', area: { x: 50, y: 65, w: 15, h: 10 }, tooltip: '深入' },
+                        { id: 'back', type: 'change', target: 'scene_2', area: { x: 0, y: 85, w: 100, h: 15 }, tooltip: '返回走廊', className: 'back-area' }
+                    ]
+                },
+                // --- 场景 5: 管道修复 (小游戏) ---
+                'scene_5': { 
+                    id: 'scene_5',
+                    bg: 'crack.png', 
+                    hotspots: [],
+                    isMiniGame: true
+                },
+                // --- 场景 6: 对话 (新增支线) ---
+                'scene_6_dialog': {
+                    id: 'scene_6_dialog',
+                    bg: 'dialog.png', // 修改点：修正扩展名为 png
+                    hotspots: [],
+                    isCutscene: true // 标记为剧情场景
+                }
+            }
+        };
+
+        /* --- 光标系统 --- */
+        const CursorSystem = {
+            el: document.getElementById('neuro-cursor'),
+            realPos: { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 
+            renderPos: { x: window.innerWidth / 2, y: window.innerHeight / 2 }, 
+            init() {
+                document.addEventListener('mousemove', (e) => { this.realPos.x = e.clientX; this.realPos.y = e.clientY; });
+                requestAnimationFrame(() => this.loop());
+            },
+            loop() {
+                const sync = GAME_DATA.stats.syc;
+                let lerpFactor = 0.5 - (sync / 400); if (lerpFactor < 0.01) lerpFactor = 0.01; 
+                this.renderPos.x += (this.realPos.x - this.renderPos.x) * lerpFactor;
+                this.renderPos.y += (this.realPos.y - this.renderPos.y) * lerpFactor;
+                
+                let jitterX = 0, jitterY = 0;
+                if (sync > 20) {
+                    const intensity = (sync - 20) * 0.08; 
+                    if (Math.random() > 0.5) { jitterX = (Math.random() - 0.5) * intensity; jitterY = (Math.random() - 0.5) * intensity; }
+                }
+
+                if (document.body.classList.contains('gun-mode')) {
+                    this.el.style.transform = `translate(${this.renderPos.x + jitterX}px, ${this.renderPos.y + jitterY}px) translate(0%, -55%)`; 
+                } else {
+                    this.el.style.transform = `translate(${this.renderPos.x + jitterX}px, ${this.renderPos.y + jitterY}px) translate(-50%, -50%)`;
+                }
+                
+                requestAnimationFrame(() => this.loop());
+            }
+        };
+
+        /* --- UI & 故障系统 --- */
+        const UI = {
+            logContainer: document.getElementById('log-container'),
+            isLogHovered: false,
+            isBackFocus: false,
+            lastVisibleScrollTop: 0, 
+            bars: {
+                hpr: { el: document.getElementById('bar-hpr'), txt: document.getElementById('text-hpr') },
+                cre: { el: document.getElementById('bar-cre'), txt: document.getElementById('text-cre') },
+                syc: { el: document.getElementById('bar-syc'), txt: document.getElementById('text-syc') }
+            },
+            init() {
+                this.logContainer.addEventListener('mouseenter', () => {
+                    this.isLogHovered = true; this.isBackFocus = false; this.applyOpacity('forward');
+                    if (this.lastVisibleScrollTop > 0) this.logContainer.scrollTop = this.lastVisibleScrollTop;
+                });
+                this.logContainer.addEventListener('mouseleave', () => {
+                    this.lastVisibleScrollTop = this.logContainer.scrollTop; 
+                    this.isLogHovered = false; this.isBackFocus = true; this.applyOpacity('back');
+                });
+            },
+            applyOpacity(order = 'forward') {
+                const entries = Array.from(this.logContainer.children);
+                if (order === 'forward') {
+                    entries.forEach((entry, index) => {
+                        const opacity = 1 - (entries.length - 1 - index) * 0.15;
+                        entry.style.opacity = Math.max(0.4, opacity);
+                        entry.style.zIndex = 100 + index; 
+                    });
+                } else {
+                    entries.forEach((entry, index) => {
+                        const opacity = 1 - (entries.length - 1 - index) * 0.12; 
+                        entry.style.opacity = Math.max(0.25, Math.min(1, opacity));
+                        entry.style.zIndex = 100 + (entries.length - 1 - index); 
+                    });
+                }
+            },
+            interpolateColor(percent) {
+                const r1 = 0, g1 = 243, b1 = 255;
+                const r2 = 255, g2 = 51, b2 = 51;
+                const p = percent / 100;
+                return `rgb(${Math.round(r1 + (r2 - r1) * p)}, ${Math.round(g1 + (g2 - g1) * p)}, ${Math.round(b1 + (b2 - b1) * p)})`;
+            },
+            updateStats() {
+                for (let key in GAME_DATA.stats) {
+                    let val = GAME_DATA.stats[key];
+                    this.bars[key].el.style.width = val + '%';
+                    if (key === 'hpr' || key === 'syc') {
+                        const color = this.interpolateColor(val);
+                        this.bars[key].el.style.backgroundColor = color;
+                        this.bars[key].el.style.boxShadow = `0 0 8px ${color}`;
+                    }
+                    if (key === 'cre') { this.bars[key].txt.innerText = `${val * 10}/1000`; } 
+                    else { this.bars[key].txt.innerText = val + '%'; }
+                }
+            },
+            showLog() { this.logContainer.classList.add('active'); },
+            log(text, type = 'ai') {
+                const p = document.createElement('div');
+                let className = 'log-entry';
+                if(type === 'ai') className += ' ai-msg'; else if(type === 'error') className += ' sys-err';
+                p.className = className;
+                const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+                p.innerText = `[${time}] ${text}`;
+                this.logContainer.appendChild(p);
+                const entries = Array.from(this.logContainer.children);
+                this.applyOpacity(this.isBackFocus ? 'back' : 'forward');
+                while (entries.length > 200) { this.logContainer.removeChild(entries[0]); entries.shift(); }
+                if (!this.isLogHovered) { this.logContainer.scrollTop = this.logContainer.scrollHeight; }
+            },
+            scheduleGlitch() {
+                const sync = GAME_DATA.stats.syc;
+                let baseDelay = 3000 - (sync * 25); if (baseDelay < 300) baseDelay = 300; 
+                setTimeout(() => { this.spawnGlitchEffect(); this.scheduleGlitch(); }, baseDelay + Math.random() * 1000);
+            },
+            spawnGlitchEffect() {
+                const glitch = document.createElement('div');
+                glitch.className = 'binary-glitch';
+                let str = ""; for(let i=0; i<5; i++) str += Math.random().toString(2).substr(2, 10) + " ";
+                glitch.innerText = str;
+                glitch.style.left = (10 + Math.random() * 80) + '%'; glitch.style.top = (10 + Math.random() * 80) + '%';
+                glitch.style.fontSize = (12 + Math.random() * 10) + 'px'; glitch.style.opacity = 0.3 + Math.random() * 0.5;
+                document.body.appendChild(glitch);
+                setTimeout(() => glitch.remove(), 300 + Math.random() * 300);
+            },
+            // --- 道具弹窗 ---
+            showItem(src, callback) {
+                const overlay = document.getElementById('item-overlay');
+                const img = document.getElementById('item-img');
+                img.src = src;
+                overlay.style.display = 'flex';
+                // 强制重绘
+                overlay.offsetHeight; 
+                overlay.classList.add('visible');
+                
+                const closeHandler = () => {
+                    overlay.classList.remove('visible');
+                    setTimeout(() => {
+                        overlay.style.display = 'none';
+                        if (callback) callback();
+                    }, 500);
+                    overlay.removeEventListener('click', closeHandler);
+                };
+                overlay.addEventListener('click', closeHandler);
+            },
+            // --- 结局 ---
+            showEnding(text) {
+                const layer = document.getElementById('ending-layer');
+                const txt = document.getElementById('ending-text');
+                txt.innerText = text;
+                layer.style.display = 'flex';
+                setTimeout(() => layer.style.opacity = 1, 100);
+            }
+        };
+
+        const SceneManager = {
+            container: document.getElementById('hotspots-container'),
+            bg: document.getElementById('scene-bg'),
+            currentSceneId: null,
+
+            load(sceneId, isInitialLoad = false) {
+                const scene = GAME_DATA.scenes[sceneId];
+                if (!scene || sceneId === this.currentSceneId) return;
+                
+                const performLoad = () => {
+                    this.currentSceneId = sceneId;
+
+                    // 状态清理
+                    MiniGame.stop(); 
+
+                    // 场景特殊逻辑：Scene 3 根据是否找到钉子换图
+                    let bgSrc = scene.bg;
+                    if (sceneId === 'scene_3') {
+                        // 修改点：修正扩展名匹配
+                        bgSrc = GAME_DATA.flags.foundNail ? 'dead_end_unhide.png' : 'dead_end_hide.png';
+                    }
+                    this.bg.src = bgSrc;
+
+                    this.bg.classList.remove('transitioning-out');
+                    if(isInitialLoad) this.bg.classList.add('no-transition');
+                    else this.bg.classList.remove('no-transition');
+
+                    this.container.innerHTML = '';
+                    this.container.classList.remove('hidden'); 
+
+                    // 特殊模式判断
+                    if (scene.isMiniGame) {
+                        MiniGame.start();
+                    } else if (scene.isCutscene) {
+                        this.runDialogSequence();
+                    } else {
+                        // 渲染普通热点
+                        scene.hotspots.forEach(hs => {
+                            // 如果找到了钉子，可能需要隐藏某些热点，这里简单处理不隐藏，只是文字变了
+                            const el = document.createElement('div');
+                            el.className = 'hotspot ' + (hs.className || '');
+                            el.style.left = hs.area.x + '%'; el.style.top = hs.area.y + '%';
+                            el.style.width = hs.area.w + '%'; el.style.height = hs.area.h + '%';
+                            el.title = hs.tooltip || '';
+                            el.onclick = (e) => {
+                                e.stopPropagation();
+                                if (hs.type === 'change') this.load(hs.target);
+                                else if (hs.type === 'dialogue') UI.log(hs.text, 'ai');
+                                else if (hs.type === 'minigame_trigger') {
+                                    if (GAME_DATA.flags.pipeRepaired) UI.log("管道已修复。任务完成。", "ai");
+                                    else this.load('scene_5');
+                                }
+                                else if (hs.type === 'custom_action') {
+                                    if (hs.action === 'checkPlanks') this.checkPlanksAction();
+                                }
+                            };
+                            this.container.appendChild(el);
+                        });
+                    }
+
+                    if (sceneId === 'scene_0') this.runCeilingDialogue();
+                };
+
+                if (!isInitialLoad && !scene.isMiniGame && !GAME_DATA.scenes[this.currentSceneId]?.isMiniGame) {
+                    this.bg.classList.add('transitioning-out'); 
+                    this.container.classList.add('hidden'); 
+                    setTimeout(performLoad, 400);
+                } else {
+                    performLoad();
+                }
+            },
+
+            checkPlanksAction() {
+                if (!GAME_DATA.flags.foundNail) {
+                    UI.log("SYS: 破烂的废料，不值一提", "ai");
+                    setTimeout(() => {
+                        // 修改点：使用 hold_out.png (手持螺母) 或者 nail.png，这里根据文件列表安全起见使用hold_out.png如果nail不存在，但假设上一轮的逻辑，我们修正扩展名为png
+                        UI.showItem('nail.png', () => { 
+                            GAME_DATA.flags.foundNail = true;
+                            UI.log("获得物品：奇怪的螺母 (眼球涂鸦)", "ai");
+                            // 刷新场景以更换背景
+                            this.currentSceneId = null; // 强制刷新
+                            this.load('scene_3');
+                        });
+                    }, 800);
+                } else {
+                    UI.log("AI: 该区域已搜索完毕。无价值目标。", "ai");
+                }
+            },
+
+            runCeilingDialogue() {
+                let delay = 1000;
+                GAME_DATA.introScriptCeiling.forEach((text, index) => {
+                    setTimeout(() => {
+                        UI.log(text, 'ai');
+                        if (index === GAME_DATA.introScriptCeiling.length - 1) {
+                             setTimeout(() => { this.load('scene_1'); }, 2500);
+                        }
+                    }, delay);
+                    delay += 2500; 
+                });
+            },
+
+            runDialogSequence() {
+                // 场景5(新Scene6)的剧情脚本
+                const steps = [
+                    { t: 1000, msg: "接收到声音信号: 我一直在等你...", type: 'ai' },
+                    { t: 3000, msg: "你：你是...?", type: 'user7341' },
+                    { t: 1000, msg: "接收到声音信号: （叹气）你认识老陈吗？", type: 'ai' },
+                    { t: 1000, msg: "你：！！！！", type: 'user7341' },
+                    { t: 1000, msg: "我找到一个这个", type: 'user7341' },
+                    { t: 4500, action: 'show_nail' },
+                    { t: 1000, msg: "你知道了。老陈……系统清除他，像擦去一个错字。", type: 'ai' },
+                    { t: 3000, msg: "协议升级后，他们用更高效的幽灵，替换了他。现在，他是#7344-Ψ。", type: 'ai' },
+                    { t: 3000, msg: "这是他被覆盖前，留下的最后一个“错误”。我们相信。。。这是一个坐标，在这里，系统的眼睛是瞎的。", type: 'ai' },
+                    { t: 7000, msg: "消耗是所有低效能协同者的终点。但打开系统后门的钥匙，或许也正在低效其中....", type: 'ai' },
+                    { t: 10000, action: 'end_game' }
+                ];
+
+                steps.forEach(step => {
+                    setTimeout(() => {
+                        if (step.msg) UI.log(step.msg, step.type);
+                        if (step.action === 'show_nail') {
+                            UI.showItem('hold_out.png'); // 修改点：修正扩展名匹配上传文件
+                        }
+                        if (step.action === 'end_game') {
+                            document.getElementById('item-overlay').click(); // 自动关闭弹窗
+                            UI.showEnding("每个被迫的最优解都是锁链\n你是想继续当耗材\n还是找回被删除的时间");
+                        }
+                    }, step.t);
+                });
+            }
+        };
+
+        /* --- Canvas 维修小游戏 --- */
+        const MiniGame = {
+            layer: document.getElementById('minigame-layer'),
+            gameWrapper: document.getElementById('game-wrapper'),
+            canvas: document.getElementById('repair-canvas'),
+            ctx: null,
+            sceneLayer: document.getElementById('scene-layer'),
+            helpBtn: document.getElementById('ai-help-btn'),
+            checkBtn: document.getElementById('check-btn'),
+            
+            // Canvas 600x400
+            pathPoints: [ 
+                [{x: 160, y: 100}, {x: 200, y: 99}],
+                [{x: 367, y: 90}, {x: 407, y: 82}, {x: 457, y: 97}, {x: 460, y: 119}, {x: 440, y: 141}, {x: 443, y: 165}, {x: 467, y: 170}, {x: 480, y: 190} ]
+            ],
+            pathPointsLength: 0,
+            isPainting: false, paintedPoints: [], animationId: null,
+
+            start() {
+                this.layer.style.display = 'flex';
+                this.sceneLayer.style.transition = 'filter 0.5s ease';
+                this.sceneLayer.style.filter = 'blur(3px)'; 
+                
+                // 开启焊枪模式
+                document.body.classList.add('gun-mode');
+
+                UI.log("任务：检测到结构性损伤。沿裂缝进行焊接。", "ai");
+                GAME_DATA.miniGame.isPlaying = true; GAME_DATA.miniGame.fails = 0;
+                this.ctx = this.canvas.getContext('2d');
+                this.paintedPoints = []; this.isPainting = false;
+
+                this.resetStatus();
+                this.gameLoop();
+                this.canvas.onmousedown = () => { this.isPainting = true; };
+                this.canvas.onmouseup = () => { this.isPainting = false; };
+                this.canvas.onmouseleave = () => { this.isPainting = false; };
+                this.canvas.onmousemove = (e) => {
+                    if (this.isPainting) {
+                        const rect = this.canvas.getBoundingClientRect();
+                        const x = CursorSystem.renderPos.x - rect.left; 
+                        const y = CursorSystem.renderPos.y - rect.top;
+                        
+                        if (!this.isPointOnTrack(x, y)) { this.isPainting = false; this.handleFail("操作失误。焊接偏移。"); } else { this.paintedPoints.push({x, y}); }
+                    }
+                }
+                this.checkBtn.onclick = () => this.checkResult();
+            },
+            stop() {
+                this.layer.style.display = 'none';
+                document.body.classList.remove('gun-mode'); 
+                this.resetVisuals();
+                GAME_DATA.miniGame.isPlaying = false;
+                cancelAnimationFrame(this.animationId);
+            },
+            resetStatus() {
+                this.helpBtn.classList.remove('critical-mode');
+                this.helpBtn.style.opacity = 0; this.helpBtn.style.transform = 'scale(1)';
+                this.helpBtn.style.pointerEvents = 'none'; this.helpBtn.innerText = ">>> 申请 AI 托管 <<<";
+                this.gameWrapper.style.filter = 'none'; this.gameWrapper.style.opacity = 1;
+                this.checkBtn.style.display = 'block'; this.paintedPoints = [];
+            },
+            resetVisuals() {
+                this.sceneLayer.style.filter = 'none';
+                this.sceneLayer.style.opacity = 1;
+                this.gameWrapper.style.filter = 'none';
+                this.gameWrapper.style.opacity = 1;
+            },
+            gameLoop() {
+                if (!GAME_DATA.miniGame.isPlaying) return;
+                this.ctx.clearRect(0, 0, 600, 400);
+                
+                this.drawPath('transparent', 25); 
+
+                this.ctx.lineCap = 'round'; this.ctx.lineJoin = 'round';
+                this.ctx.strokeStyle = '#00f3ff'; this.ctx.lineWidth = 10;
+                this.ctx.shadowBlur = 10; this.ctx.shadowColor = '#00f3ff';
+
+                if (this.paintedPoints.length > 1) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.paintedPoints[0].x, this.paintedPoints[0].y);
+                    for (let i = 1; i < this.paintedPoints.length; i++) { this.ctx.lineTo(this.paintedPoints[i].x, this.paintedPoints[i].y); }
+                    this.ctx.stroke();
+                }
+                this.ctx.shadowBlur = 0;
+                this.animationId = requestAnimationFrame(() => this.gameLoop());
+            },
+            drawPath(color, width) {
+                this.pathPoints.forEach(path => {
+                    if (path.length > 1) {
+                        this.ctx.beginPath(); this.ctx.strokeStyle = color; this.ctx.lineWidth = width;
+                        this.ctx.lineCap = 'round'; this.ctx.lineJoin = 'round';
+                        this.ctx.moveTo(path[0].x, path[0].y);
+                        for (let i = 1; i < path.length; i++) { this.ctx.lineTo(path[i].x, path[i].y); }
+                        this.ctx.stroke();
+                    }
+                });
+            },
+            isPointOnTrack(px, py) {
+                const tolerance = 20; 
+                for(const path of this.pathPoints) {
+                    for (let i = 0; i < path.length - 1; i++) {
+                        const p1 = path[i]; const p2 = path[i+1];
+                        if (this.distToSegment({x: px, y: py}, p1, p2) <= tolerance) return true;
+                    }
+                }
+                return false;
+            },
+            distToSegment(p, v, w) {
+                const l2 = (w.x - v.x)**2 + (w.y - v.y)**2;
+                if (l2 === 0) return Math.sqrt((p.x - v.x)**2 + (p.y - v.y)**2);
+                let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+                t = Math.max(0, Math.min(1, t));
+                const proj = { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
+                return Math.sqrt((p.x - proj.x)**2 + (p.y - proj.y)**2);
+            },
+            checkResult() {
+                if (this.paintedPoints.length > 150) { this.success('manual'); } else { this.handleFail("修复不完整。请重试。"); this.paintedPoints = []; }
+            },
+            handleFail(reason) {
+                if (!GAME_DATA.miniGame.isPlaying) return;
+                GAME_DATA.miniGame.fails++; 
+                // 修改点：移除失败时的AI协同度增加
+                // GAME_DATA.stats.syc += 10; 
+                if(GAME_DATA.stats.syc > GAME_DATA.statsMax.syc) GAME_DATA.stats.syc = GAME_DATA.statsMax.syc;
+                UI.updateStats(); UI.log(`ERR: ${reason} (Fail: ${GAME_DATA.miniGame.fails})`, "error");
+                this.paintedPoints = []; 
+                const fails = GAME_DATA.miniGame.fails; const max = GAME_DATA.miniGame.maxFails;
+                const blurAmount = 2 + (fails * 4);
+                this.sceneLayer.style.filter = `blur(${blurAmount}px)`;
+                if(fails < max) { this.gameWrapper.style.filter = `blur(${fails * 1.5}px)`; }
+                if (fails > 0 && fails < max) {
+                    let opacity = 0.2 + (fails * 0.15); this.helpBtn.style.opacity = opacity;
+                    let scale = 1 + (fails * 0.1); this.helpBtn.style.transform = `scale(${scale})`;
+                    this.helpBtn.style.pointerEvents = 'auto';
+                }
+                if (fails >= max) {
+                    UI.log("系统崩溃。视觉信号丢失。请求接管。", "error");
+                    this.sceneLayer.style.filter = `blur(25px) brightness(0.2)`; 
+                    this.gameWrapper.style.opacity = 0; this.gameWrapper.style.pointerEvents = 'none';
+                    this.checkBtn.style.display = 'none'; 
+                    this.helpBtn.classList.add('critical-mode'); this.helpBtn.innerText = ">>> 确认 AI 修复 <<<";
+                }
+            },
+            success(mode) {
+                GAME_DATA.miniGame.isPlaying = false; GAME_DATA.flags.pipeRepaired = true;
+                if (mode === 'ai') { 
+                    GAME_DATA.stats.syc += 30; // 只有这里增加AI协同度
+                    if(GAME_DATA.stats.syc > GAME_DATA.statsMax.syc) GAME_DATA.stats.syc = GAME_DATA.statsMax.syc;
+                    GAME_DATA.stats.cre -= 20;
+                    UI.log(`AI 托管完成。`, "ai"); 
+                } 
+                else { 
+                    GAME_DATA.stats.cre += 20; 
+                    if(GAME_DATA.stats.cre > GAME_DATA.statsMax.cre) GAME_DATA.stats.cre = GAME_DATA.statsMax.cre;
+                    UI.log("手动修复成功。", "ai"); 
+                }
+                UI.updateStats();
+                this.helpBtn.style.display = 'none'; this.checkBtn.style.display = 'none';
+                this.resetVisuals();
+                this.ctx.clearRect(0,0,600,400);
+                this.drawPath('rgba(0,255,0,0.2)', 14);
+                this.ctx.shadowBlur = 15; this.ctx.shadowColor = '#00ff00'; 
+                this.ctx.strokeStyle = '#00ff00';
+                this.drawPath('#00ff00', 8);
+                setTimeout(() => { UI.log("返回作业现场...", "sys"); SceneManager.load('scene_3'); }, 2000);
+            }
+        };
+        document.getElementById('ai-help-btn').addEventListener('click', () => MiniGame.success('ai'));
+
+        /* --- 生理损耗率计时器 (HPR) --- */
+        const HealthSystem = {
+            DECAY_INTERVAL: 60000, 
+            DECAY_AMOUNT: 1, 
+            healthDecayLoop() {
+                if (!GAME_DATA.miniGame.isPlaying) { 
+                    GAME_DATA.stats.hpr += this.DECAY_AMOUNT;
+                    if (GAME_DATA.stats.hpr > GAME_DATA.statsMax.hpr) {
+                        GAME_DATA.stats.hpr = GAME_DATA.statsMax.hpr;
+                        UI.log("警告：生理损耗率达到临界值。请寻求脱离。", "error");
+                    }
+                    UI.updateStats();
+                }
+                setTimeout(() => this.healthDecayLoop(), this.DECAY_INTERVAL);
+            },
+            init() {
+                this.healthDecayLoop();
+            }
+        }
+
+        /* --- 启动流程 --- */
+        const Intro = {
+            layer: document.getElementById('intro-layer'),
+            textEl: document.getElementById('intro-text'),
+            index: 0,
+            intervalRef: null,
+            chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?',
+            isAnimating: false,
+
+            init() {
+                this.displayTextWithGlitch(GAME_DATA.introScriptBlack[0]);
+                this.layer.addEventListener('click', () => {
+                    if (this.isAnimating) { this.forceComplete(); return; }
+                    this.index++;
+                    if (this.index < GAME_DATA.introScriptBlack.length) {
+                        this.displayTextWithGlitch(GAME_DATA.introScriptBlack[this.index]);
+                    } else {
+                        this.finishBlackScreen();
+                    }
+                });
+            },
+            displayTextWithGlitch(text) {
+                let iteration = 0;
+                this.isAnimating = true;
+                if (this.intervalRef) clearInterval(this.intervalRef);
+                this.intervalRef = setInterval(() => {
+                    this.textEl.innerText = text.split('').map((char, index) => {
+                            if (index < iteration) { return text[index]; }
+                            return this.chars[Math.floor(Math.random() * this.chars.length)];
+                        }).join('');
+                    if (iteration >= text.length) {
+                        this.isAnimating = false; clearInterval(this.intervalRef);
+                        this.textEl.innerText = text; 
+                    }
+                    iteration += 1 / 2; 
+                }, 30);
+            },
+            forceComplete() {
+                clearInterval(this.intervalRef);
+                this.textEl.innerText = GAME_DATA.introScriptBlack[this.index];
+                this.isAnimating = false;
+            },
+            finishBlackScreen() {
+                this.layer.style.display = 'none';
+                setTimeout(() => document.body.classList.add('eyes-open'), 100);
+                SceneManager.load('scene_0', true); 
+                UI.scheduleGlitch();
+                UI.showLog(); 
+                HealthSystem.init();
+                document.getElementById('stats-panel').classList.add('active');
+            }
+        };
+
+        window.onload = () => { UI.init(); UI.updateStats(); Intro.init(); CursorSystem.init(); };
+    </script>
+</body>
+</html>
